@@ -1,5 +1,10 @@
 Revision history for Catalyst-Model-DBIDM
 
+0.05    
+	* Moosefied.
+	* Improved Compatibility DBIx::DataModel V2.
+	* add new confing paramenter. ->config->{use_singleton}
+
 0.04    Wed Mar 18 20:54:19 CET 2009
         A test was failing because of a compatibility-breaking change in
         DBIx::DataModel 1.0

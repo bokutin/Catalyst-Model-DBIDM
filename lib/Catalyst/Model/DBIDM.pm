@@ -1,12 +1,13 @@
 package Catalyst::Model::DBIDM;
 
-use strict;
-use warnings;
+use Moose;
+extends qw(Catalyst::Model);
 
-use base qw/ Catalyst::Model /;
-use NEXT;
-use DBI;
 use Carp;
+use DBI;
+
+has schema_class  => ( is => "ro", isa => "Str" );
+has use_singleton => ( is => "ro", isa => "Bool", default => 1 );
 
 =head1 NAME
 
@@ -14,11 +15,11 @@ Catalyst::Model::DBIDM - DBIx::DataModel model class
 
 =head1 VERSION
 
-Version 0.04
+Version 0.05
 
 =cut
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 =head1 SYNOPSIS
 
@@ -81,7 +82,7 @@ database if need be).
 
 =over 4
 
-=item new
+=item BUILD
 
 Constructor. It creates an C<ACCEPT_CONTEXT> method for the C<MyApp::Model::DM> class and
 for pseudo-classes for each of the schema's tables (C<MyApp::Model::DM::Employee>,
@@ -137,34 +138,53 @@ Table class name.
 
 =cut
 
-sub new {
-    my $self  = shift->NEXT::new(@_);
+sub BUILD {
+    my $self = shift;
     my $class = ref($self);
 
     (my $model_name = $class) =~ s/^[\w:]+::(?:Model|M):://;
 
-    my $schema_class = $self->{schema_class}
+    my $schema_class = $self->schema_class
         or croak "->config->{schema_class} must be defined for this model";
 
     no strict 'refs';
     *{"${class}::ACCEPT_CONTEXT"} = sub {
         my ($this, $c) = @_;
-        $self->connect_if_not($c, $schema_class);
-        return $schema_class;
+
+        if ($self->use_singleton) {
+            $self->connect_if_not($c, $schema_class);
+            return $schema_class;
+        }
+        else {
+            my $schema = $self->get_schema_instance($c, $schema_class);
+            die unless blessed($schema) and $schema->isa("DBIx::DataModel::Schema");
+            return $schema;
+        }
     };
 
-    foreach my $table_class ( $schema_class->tables ) {
+    my @table_classes= $schema_class->can('tables')
+        ? $schema_class->tables                          # V1
+        : map {$_->class} $schema_class->metadm->tables; # V2
+    foreach my $table_class (@table_classes) {
         (my $table_model_name = $table_class) =~ s/^${schema_class}:://;
         *{"${class}::${table_model_name}::ACCEPT_CONTEXT"} = sub {
             my ($this, $c) = @_;
-            $self->connect_if_not($c, $schema_class);
-            return $table_class;
+
+            if ($self->use_singleton) {
+                $self->connect_if_not($c, $schema_class);
+                return $table_class;
+            }
+            else {
+                my $schema = $self->get_schema_instance($c, $schema_class);
+                die unless blessed($schema) and $schema->isa("DBIx::DataModel::Schema");
+                return $schema->table(${table_model_name});
+            }
         };
     }
     return $self;
 }
 
-=item connect_if_not
+=item connect_if_not (used if ->config->{use_singleton} = 1, DEFAULT)
 
 Initialises the Schema (i.e., connects to the database), if not already done.
 This method returns immediately if the Schema class already has a dbh() (See
@@ -181,6 +201,37 @@ sub connect_if_not {
     if ( $self->{connect_info} ) {
         $schema_class->dbh( DBI->connect( @{$self->{connect_info}} ) );
     }
+}
+
+=item get_schema_instance (used if ->config->{use_singleton} = 0)
+
+Example
+
+    package YourApp::Model::DBIDM;
+
+    use Moose;
+    extends qw(Catalyst::Model::DBIDM);
+
+    __PACKAGE__->config(
+        schema_class  => "YourApp::Schema",
+        use_singleton => 0,
+    );
+
+    override get_schema_instance => sub {
+        my ($self, $c, $schema_class) = @_;
+
+        my $schema = $schema_class->new(
+            dbh => DBI->connect( ... ),
+            sql_abstract => SQL::Abstract::More->new(
+                quote_char => q{"}, name_sep => q{.},
+            ),
+        );
+    };
+
+=cut
+
+sub get_schema_instance {
+    die "Please override method get_schema_instance() if use ->config->{use_singleton} = 0.";
 }
 
 =back
